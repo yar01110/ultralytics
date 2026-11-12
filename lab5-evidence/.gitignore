@@ -1,0 +1,3 @@
+# Re-include Lab #5 evidence images that the project root .gitignore excludes
+!*.jpg
+!*.png

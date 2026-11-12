@@ -1,0 +1,90 @@
+﻿Lab #5 - Task 4 execution log
+=============================
+Date:        2026-11-12
+Platform:    Windows 11, PowerShell 5.1
+Repository:  https://github.com/yar01110/ultralytics
+Branch:      semester-investigation
+Pinned:      v8.4.211 / d2b7876e79ad2e02fd77221622774b511a8f0cb3
+Environment: .venv (Python 3.14.0, torch 2.15.0+cpu, torchvision 0.29.2+cpu)
+
+
+--- Environment activation -----------------------------------------------
+
+> cd C:\Users\lolag\Desktop\peak\ultralytics
+> .\.venv\Scripts\Activate.ps1
+
+
+--- Baseline check: is the running code the local fork or a wheel? -------
+
+> python -c "import ultralytics; print(ultralytics.__file__)"
+C:\Users\lolag\Desktop\peak\ultralytics\ultralytics\__init__.py
+
+> python -m pip list | Select-String ultralytics
+ultralytics              8.4.211     C:\Users\lolag\Desktop\peak\ultralytics
+
+Interpretation: the import resolves inside the working copy, not into
+site-packages, and pip reports a source path instead of a version alone.
+The editable install is therefore source-aware: edits to the fork take
+effect without reinstalling.
+
+
+--- Functionality 1: inference (yolo predict) ----------------------------
+
+> yolo predict model=yolo11n.pt source=https://ultralytics.com/images/bus.jpg
+
+Ultralytics 8.4.211  Python-3.14.0 torch-2.15.0+cpu CPU (13th Gen Intel Core i7-13620H)
+YOLO11n summary (fused): 100 layers, 2,616,248 parameters, 0 gradients, 6.5 GFLOPs
+
+Found https://ultralytics.com/images/bus.jpg locally at bus.jpg
+image 1/1 C:\Users\lolag\Desktop\peak\ultralytics\bus.jpg: 640x480 4 persons, 1 bus, 84.2ms
+Speed: 7.3ms preprocess, 84.2ms inference, 30.8ms postprocess per image at shape (1, 3, 640, 480)
+Results saved to C:\Users\lolag\Desktop\peak\ultralytics\runs\detect\predict-2
+
+Artefact: lab5-evidence/functionality1-predict-bus.jpg
+
+
+--- Functionality 2: validation against labels (yolo val) ----------------
+
+> yolo val model=yolo11n.pt data=coco8.yaml
+
+Ultralytics 8.4.211  Python-3.14.0 torch-2.15.0+cpu CPU (13th Gen Intel Core i7-13620H)
+YOLO11n summary (fused): 100 layers, 2,616,248 parameters, 0 gradients, 6.5 GFLOPs
+
+val: Fast image access (ping: 0.1+-0.0 ms, read: 112.8+-58.1 MB/s, size: 54.0 KB)
+val: Scanning C:\Users\lolag\Desktop\peak\datasets\coco8\labels\val.cache... 4 images, 0 backgrounds, 0 corrupt
+
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95)
+                   all          4         17       0.57       0.85      0.854      0.631
+                person          3         10      0.557        0.6       0.63      0.273
+                   dog          1          1      0.548          1      0.995      0.697
+                 horse          1          2      0.531          1      0.995      0.671
+              elephant          1          2      0.371        0.5      0.516      0.256
+              umbrella          1          1      0.569          1      0.995      0.995
+          potted plant          1          1      0.847          1      0.995      0.895
+
+Speed: 1.5ms preprocess, 50.5ms inference, 0.0ms loss, 3.4ms postprocess per image
+Results saved to C:\Users\lolag\Desktop\peak\ultralytics\runs\detect\val-2
+
+Artefacts: lab5-evidence/functionality2-confusion-matrix.png
+           lab5-evidence/functionality2-PR-curve.png
+           lab5-evidence/functionality2-predictions.jpg
+           lab5-evidence/functionality2-groundtruth-labels.jpg
+
+
+--- Note on the validation numbers --------------------------------------
+
+These figures are NOT a performance measurement and are not reported as
+one. The validation split of coco8 contains 4 images and 17 instances
+across 6 classes. Per the dataset header in
+ultralytics/cfg/datasets/coco8.yaml, COCO8 consists of the "first 8 images
+from COCO train2017" - that is, images drawn from the split the pretrained
+weights were trained on. Evaluating on them is evaluating on training data,
+which is why mAP50-95 = 0.631 here is far higher than the published
+YOLO11n figure for the held-out COCO val2017 set (to be confirmed against
+the official model card in Lab #8).
+
+The run therefore establishes that the validation pipeline, the label
+loader and the mAP computation all execute correctly - a functional
+(plumbing) check. It establishes nothing about detection quality. Lab #8
+will repeat this against COCO val2017 (5,000 held-out labelled images) to
+obtain a measurement that can support a claim.

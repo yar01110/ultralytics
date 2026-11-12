@@ -1,0 +1,139 @@
+Lab #5 - Candidate C probe log: Anomalib (catalogue #17, Advanced CV)
+====================================================================
+Date:        2026-11-12
+Platform:    Windows 11, Python 3.14.0, CPU only
+Environment: C:\Users\lolag\Desktop\peak\lab5-candidates\anomalib\.venv
+             (separate virtual environment, outside the SUT fork)
+
+
+--- Installation ---------------------------------------------------------
+
+> python -m venv .venv
+> .\.venv\Scripts\python.exe -m pip install anomalib
+
+Exit code 0. anomalib 2.7.0 installed.
+
+73 packages resolved, including: lightning 2.6.6, pytorch-lightning 2.6.6,
+torch 2.15.0, torchvision 0.29.2, torchmetrics 1.9.0, kornia 0.9.0,
+scikit-learn 1.9.1, scikit-image 0.26.0, opencv-python-headless 5.0.0.93,
+matplotlib 3.11.2, pandas 3.1.1, timm 1.0.31, imagecodecs 2026.11.8,
+jsonargparse 4.46.0, omegaconf 2.4.0, freia 0.2.
+
+One dependency (freia 0.2) had no prebuilt wheel and was COMPILED FROM
+SOURCE via its pyproject.toml. The build succeeded without a manual
+toolchain installation.
+
+NOTE ON THE CATALOGUE'S RISK WARNING: the catalogue flags Anomalib for
+"PyTorch-version requirements". On this machine that risk did NOT
+materialise - the install resolved and completed on Python 3.14 with no
+manual version pinning. This is recorded as a catalogue assumption that
+was tested and not confirmed.
+
+OBSERVATION: anomalib depends on timm. Candidate C therefore transitively
+contains candidate B, which is relevant when comparing dependency weight:
+timm installed 26 packages, anomalib installed 73 including timm itself.
+
+
+--- Environment ----------------------------------------------------------
+
+python   : 3.14.0
+torch    : 2.15.0+cpu
+cuda     : False
+anomalib : 2.7.0
+
+
+--- CHECK 1: import and version ------------------------------------------
+
+> python -c "import anomalib; print(anomalib.__version__)"
+anomalib 2.7.0                                                    PASS
+
+
+--- CHECK 2: model catalogue ---------------------------------------------
+
+First attempt FAILED, but the fault was in the probe script, not in
+Anomalib. The script called an API that does not exist in 2.7.0:
+
+  ImportError: cannot import name 'get_available_models'
+  from 'anomalib.models'
+
+This is recorded deliberately: it is a defect in the probe, and it would
+be dishonest to report it as a limitation of the system under test. The
+correct API in 2.7.0 is anomalib.models.list_models.
+
+> python -c "from anomalib.models import list_models; print(len(list_models()))"
+anomaly-detection models available: 35                            PASS
+
+ai_vad, anomaly_d_i_n_o, anomaly_v_f_m, c_f_m, cfa, cflow, csflow, dfkde,
+dfm, dinomaly, draem, dsr, efficient_ad, fastflow, found_a_d, fre, fuvas,
+ganomaly, general_a_d, glass, inp_former, l2_b_t, m_h_patchcore, padim,
+patchcore, patchflow, rad, reverse_distillation, stfpm, super_a_d_d,
+supersimplenet, uflow, uni_net, vlm_ad, win_clip
+
+
+--- CHECK 3: model instantiation -----------------------------------------
+
+> python -c "from anomalib.models import Padim, Patchcore; ..."
+
+Padim       : instantiated OK,  2,782,784 parameters               PASS
+Patchcore   : instantiated OK, 24,862,528 parameters               PASS
+
+Instantiation triggered a network download of the timm backbone
+wide_resnet50_2.racm_in1k from the Hugging Face Hub. Constructing a model
+is therefore not an offline operation, which matters for reproducibility.
+
+
+--- CHECK 4: ground-truth dataset availability (C5) ----------------------
+
+> python -c "from anomalib.data import MVTecAD; dm = MVTecAD(category='bottle')"
+
+datamodule constructed OK; expected dataset root: datasets\MVTecAD
+dataset present locally: False                                    BLOCKED
+
+MVTec AD is not on this machine. A meaningful anomaly-detection
+measurement requires it, because it is what supplies both the image-level
+anomaly labels and the pixel-level masks that make Anomalib's AUROC
+figures interpretable. Three constraints apply:
+
+  - licence CC BY-NC-SA 4.0: non-commercial, share-alike, and explicitly
+    not to be committed into a fork;
+  - download size several gigabytes;
+  - obtaining it is a precondition for any quality claim, not an optional
+    extra.
+
+Nothing was downloaded during this probe. No anomaly-detection quality
+claim is therefore made.
+
+Source: https://www.mvtec.com/company/research/datasets/mvtec-ad
+
+
+--- Code-quality observations made in passing (C3) -----------------------
+
+Two deprecation warnings were emitted from inside the installed package
+during import, i.e. the library warns about its own internals:
+
+  1. timm/models/layers/__init__.py:49 - FutureWarning: importing from
+     timm.models.layers is deprecated, use timm.layers
+  2. anomalib/models/image/dinomaly/components/layers.py:22 - FutureWarning:
+     the anomalib.models.components.dinov2 package is deprecated and will be
+     removed; use the timm-based feature extractor instead
+
+The second is self-referential technical debt: a module inside Anomalib
+imports another Anomalib module that Anomalib itself marks as deprecated.
+That is a concrete, observable debt signal of the kind Lab #6 measures,
+found without running any analysis tool.
+
+
+--- Verdict for the selection record -------------------------------------
+
+C2 Reproducibility   : Y - installed and imported on Python 3.14 with no
+                       manual pinning; one dependency compiled from source
+                       successfully. Caveat: model construction requires
+                       network access for backbone weights.
+C3 Source quality    : Y - large Lightning-based codebase; self-declared
+                       deprecated internals already visible.
+C5 Ground truth      : Y in principle (MVTec AD provides labels AND pixel
+                       masks - the strongest of the three candidates), but
+                       NOT PRESENT and licence-restricted.
+C9 Setup feasibility : P - library works on this laptop, but an end-to-end
+                       run is gated on a multi-gigabyte non-commercial
+                       dataset that cannot be stored in the fork.
