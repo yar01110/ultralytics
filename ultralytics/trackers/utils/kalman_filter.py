@@ -54,6 +54,25 @@ class KalmanFilterXYAH:
         self._std_weight_position = 1.0 / 20
         self._std_weight_velocity = 1.0 / 160
 
+    def _box_std(self, box: np.ndarray, weight: float, fixed: float) -> list:
+        """Return the noise standard deviation of the four box dimensions, scaled by box size.
+
+        This is the only part of the filter that depends on the box parameterization; subclasses override it instead
+        of re-implementing `initiate`, `predict`, `project` and `multi_predict`. For (x, y, a, h), x, y and h scale with
+        the height and the aspect ratio uses a fixed standard deviation.
+
+        Args:
+            box (np.ndarray): State or measurement whose first four entries are the box, shape (4+,) or (N, 4+).
+            weight (float): Multiplier applied to the size-dependent dimensions.
+            fixed (float): Standard deviation for dimensions that do not scale with box size (the aspect ratio).
+
+        Returns:
+            (list): Four standard deviations, scalars for a single box or arrays of shape (N,) for N boxes.
+        """
+        h = box[..., 3]
+        const = fixed * np.ones_like(h) if np.ndim(h) else fixed
+        return [weight * h, weight * h, const, weight * h]
+
     def initiate(self, measurement: np.ndarray):
         """Create a track from an unassociated measurement.
 
@@ -75,16 +94,9 @@ class KalmanFilterXYAH:
         mean_vel = np.zeros_like(mean_pos)
         mean = np.r_[mean_pos, mean_vel]
 
-        std = [
-            2 * self._std_weight_position * measurement[3],
-            2 * self._std_weight_position * measurement[3],
-            1e-2,
-            2 * self._std_weight_position * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            1e-5,
-            10 * self._std_weight_velocity * measurement[3],
-        ]
+        std = self._box_std(measurement, 2 * self._std_weight_position, 1e-2) + self._box_std(
+            measurement, 10 * self._std_weight_velocity, 1e-5
+        )
         covariance = np.diag(np.square(std))
         return mean, covariance
 
@@ -106,18 +118,8 @@ class KalmanFilterXYAH:
             >>> covariance = np.eye(8)
             >>> predicted_mean, predicted_covariance = kf.predict(mean, covariance)
         """
-        std_pos = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-2,
-            self._std_weight_position * mean[3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[3],
-            self._std_weight_velocity * mean[3],
-            1e-5,
-            self._std_weight_velocity * mean[3],
-        ]
+        std_pos = self._box_std(mean, self._std_weight_position, 1e-2)
+        std_vel = self._box_std(mean, self._std_weight_velocity, 1e-5)
         motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
 
         mean = np.dot(mean, self._motion_mat.T)
@@ -144,12 +146,7 @@ class KalmanFilterXYAH:
             >>> covariance = np.eye(8)
             >>> projected_mean, projected_covariance = kf.project(mean, covariance)
         """
-        std = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-1,
-            self._std_weight_position * mean[3],
-        ]
+        std = self._box_std(mean, self._std_weight_position, 1e-1)
         innovation_cov = np.diag(np.square(std))
         if confidence is not None:  # NSA-Kalman: scale measurement noise by detection confidence (StrongSORT)
             innovation_cov *= max(1.0 - float(confidence), 0.05)
@@ -175,18 +172,8 @@ class KalmanFilterXYAH:
             >>> covariance = np.random.rand(10, 8, 8)  # Covariance matrices for 10 object states
             >>> predicted_mean, predicted_covariance = kf.multi_predict(mean, covariance)
         """
-        std_pos = [
-            self._std_weight_position * mean[:, 3],
-            self._std_weight_position * mean[:, 3],
-            1e-2 * np.ones_like(mean[:, 3]),
-            self._std_weight_position * mean[:, 3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[:, 3],
-            self._std_weight_velocity * mean[:, 3],
-            1e-5 * np.ones_like(mean[:, 3]),
-            self._std_weight_velocity * mean[:, 3],
-        ]
+        std_pos = self._box_std(mean, self._std_weight_position, 1e-2)
+        std_vel = self._box_std(mean, self._std_weight_velocity, 1e-5)
         sqr = np.square(np.r_[std_pos, std_vel]).T
 
         motion_cov = np.zeros((sqr.shape[0], 8, 8))
@@ -314,172 +301,19 @@ class KalmanFilterXYWH(KalmanFilterXYAH):
         >>> mean, covariance = kf.initiate(measurement)
     """
 
-    def initiate(self, measurement: np.ndarray):
-        """Create track from unassociated measurement.
+    def _box_std(self, box: np.ndarray, weight: float, fixed: float) -> list:
+        """Return the noise standard deviation of the four box dimensions, scaled by box size.
+
+        For (x, y, w, h) every dimension scales with the box: x and w with the width, y and h with the height, so the
+        fixed standard deviation used by the aspect-ratio parameterization is not needed.
 
         Args:
-            measurement (np.ndarray): Bounding box coordinates (x, y, w, h) with center position (x, y), width, and
-                height.
+            box (np.ndarray): State or measurement whose first four entries are the box, shape (4+,) or (N, 4+).
+            weight (float): Multiplier applied to the size-dependent dimensions.
+            fixed (float): Unused; kept for a uniform signature with `KalmanFilterXYAH._box_std`.
 
         Returns:
-            mean (np.ndarray): Float64 mean vector (8 dimensional) with zero-initialized velocities.
-            covariance (np.ndarray): Float64 covariance matrix (8x8 dimensional).
-
-        Examples:
-            >>> kf = KalmanFilterXYWH()
-            >>> measurement = np.array([100, 50, 20, 40])
-            >>> mean, covariance = kf.initiate(measurement)
+            (list): Four standard deviations, scalars for a single box or arrays of shape (N,) for N boxes.
         """
-        measurement = np.asarray(measurement, dtype=np.float64)
-        mean_pos = measurement
-        mean_vel = np.zeros_like(mean_pos)
-        mean = np.r_[mean_pos, mean_vel]
-
-        std = [
-            2 * self._std_weight_position * measurement[2],
-            2 * self._std_weight_position * measurement[3],
-            2 * self._std_weight_position * measurement[2],
-            2 * self._std_weight_position * measurement[3],
-            10 * self._std_weight_velocity * measurement[2],
-            10 * self._std_weight_velocity * measurement[3],
-            10 * self._std_weight_velocity * measurement[2],
-            10 * self._std_weight_velocity * measurement[3],
-        ]
-        covariance = np.diag(np.square(std))
-        return mean, covariance
-
-    def predict(self, mean: np.ndarray, covariance: np.ndarray):
-        """Run Kalman filter prediction step.
-
-        Args:
-            mean (np.ndarray): The 8-dimensional mean vector of the object state at the previous time step.
-            covariance (np.ndarray): The 8x8-dimensional covariance matrix of the object state at the previous time
-                step.
-
-        Returns:
-            mean (np.ndarray): Mean vector of the predicted state.
-            covariance (np.ndarray): Covariance matrix of the predicted state.
-
-        Examples:
-            >>> kf = KalmanFilterXYWH()
-            >>> mean = np.array([0, 0, 1, 1, 0, 0, 0, 0])
-            >>> covariance = np.eye(8)
-            >>> predicted_mean, predicted_covariance = kf.predict(mean, covariance)
-        """
-        std_pos = [
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[2],
-            self._std_weight_velocity * mean[3],
-            self._std_weight_velocity * mean[2],
-            self._std_weight_velocity * mean[3],
-        ]
-        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
-
-        mean = np.dot(mean, self._motion_mat.T)
-        covariance = np.linalg.multi_dot((self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
-
-        return mean, covariance
-
-    def project(self, mean: np.ndarray, covariance: np.ndarray, confidence: float | None = None):
-        """Project state distribution to measurement space.
-
-        Args:
-            mean (np.ndarray): The state's mean vector (8 dimensional array).
-            covariance (np.ndarray): The state's covariance matrix (8x8 dimensional).
-            confidence (float, optional): Detection confidence; when set, scales measurement noise by max(1 -
-                confidence, 0.05) (NSA-Kalman).
-
-        Returns:
-            mean (np.ndarray): Projected mean of the given state estimate.
-            covariance (np.ndarray): Projected covariance matrix of the given state estimate.
-
-        Examples:
-            >>> kf = KalmanFilterXYWH()
-            >>> mean = np.array([0, 0, 1, 1, 0, 0, 0, 0])
-            >>> covariance = np.eye(8)
-            >>> projected_mean, projected_cov = kf.project(mean, covariance)
-        """
-        std = [
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-        ]
-        innovation_cov = np.diag(np.square(std))
-        if confidence is not None:  # NSA-Kalman: scale measurement noise by detection confidence (StrongSORT)
-            innovation_cov *= max(1.0 - float(confidence), 0.05)
-
-        mean = mean[:4].copy()
-        covariance = covariance[:4, :4]
-        return mean, covariance + innovation_cov
-
-    def multi_predict(self, mean: np.ndarray, covariance: np.ndarray):
-        """Run Kalman filter prediction step (Vectorized version).
-
-        Args:
-            mean (np.ndarray): The Nx8 dimensional mean matrix of the object states at the previous time step.
-            covariance (np.ndarray): The Nx8x8 covariance matrix of the object states at the previous time step.
-
-        Returns:
-            mean (np.ndarray): Mean matrix of the predicted states with shape (N, 8).
-            covariance (np.ndarray): Covariance matrix of the predicted states with shape (N, 8, 8).
-
-        Examples:
-            >>> mean = np.random.rand(5, 8)  # 5 objects with 8-dimensional state vectors
-            >>> covariance = np.random.rand(5, 8, 8)  # 5 objects with 8x8 covariance matrices
-            >>> kf = KalmanFilterXYWH()
-            >>> predicted_mean, predicted_covariance = kf.multi_predict(mean, covariance)
-        """
-        std_pos = [
-            self._std_weight_position * mean[:, 2],
-            self._std_weight_position * mean[:, 3],
-            self._std_weight_position * mean[:, 2],
-            self._std_weight_position * mean[:, 3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[:, 2],
-            self._std_weight_velocity * mean[:, 3],
-            self._std_weight_velocity * mean[:, 2],
-            self._std_weight_velocity * mean[:, 3],
-        ]
-        sqr = np.square(np.r_[std_pos, std_vel]).T
-
-        motion_cov = np.zeros((sqr.shape[0], 8, 8))
-        motion_cov[:, range(8), range(8)] = sqr
-
-        mean = np.dot(mean, self._motion_mat.T)
-        left = np.dot(self._motion_mat, covariance).transpose((1, 0, 2))
-        covariance = np.dot(left, self._motion_mat.T) + motion_cov
-
-        return mean, covariance
-
-    def update(
-        self, mean: np.ndarray, covariance: np.ndarray, measurement: np.ndarray, confidence: float | None = None
-    ):
-        """Run Kalman filter correction step.
-
-        Args:
-            mean (np.ndarray): The predicted state's mean vector (8 dimensional).
-            covariance (np.ndarray): The state's covariance matrix (8x8 dimensional).
-            measurement (np.ndarray): The 4 dimensional measurement vector (x, y, w, h), where (x, y) is the center
-                position, w the width, and h the height of the bounding box.
-            confidence (float, optional): Detection confidence; when set, scales measurement noise by max(1 -
-                confidence, 0.05) (NSA-Kalman).
-
-        Returns:
-            new_mean (np.ndarray): Measurement-corrected state mean.
-            new_covariance (np.ndarray): Measurement-corrected state covariance.
-
-        Examples:
-            >>> kf = KalmanFilterXYWH()
-            >>> mean = np.array([0, 0, 1, 1, 0, 0, 0, 0])
-            >>> covariance = np.eye(8)
-            >>> measurement = np.array([0.5, 0.5, 1.2, 1.2])
-            >>> new_mean, new_covariance = kf.update(mean, covariance, measurement)
-        """
-        return super().update(mean, covariance, measurement, confidence=confidence)
+        w, h = box[..., 2], box[..., 3]
+        return [weight * w, weight * h, weight * w, weight * h]
