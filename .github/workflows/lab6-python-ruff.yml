@@ -1,0 +1,70 @@
+# Lab #6 - complexity / size / parameter-list evidence (adapted from examples/lab6-python-ruff.yml).
+# The selected rules flag potential smell SYMPTOMS (Long Method, Long Parameter List), not confirmed smells.
+# --isolated ignores the project's own Ruff config so the rule set is exactly the one listed here.
+# --exit-zero keeps the job green although the upstream code already has findings; the findings are still
+# reported in the log, the job summary and the JSON artifact.
+name: Lab6 - Python Ruff
+
+on:
+  push:
+    branches:
+      - semester-investigation
+      - 'lab6-*'
+
+permissions:
+  contents: read
+
+jobs:
+  ruff-analysis:
+    runs-on: ubuntu-24.04
+    env:
+      SOURCE_PATH: ultralytics
+      RULES: C901,PLR0912,PLR0913,PLR0915
+    steps:
+      - name: Check out this exact revision
+        uses: actions/checkout@v4
+
+      - name: Install analyzer only (not the ML project or GPU dependencies)
+        run: |
+          python -m pip install 'ruff==0.14.4' 'radon==6.0.1'
+          ruff --version
+
+      - name: Collect complexity/parameter findings
+        run: |
+          mkdir -p lab6-reports
+          ruff check "$SOURCE_PATH" --isolated --select "$RULES" --statistics --exit-zero | tee lab6-reports/ruff-statistics.txt
+          ruff check "$SOURCE_PATH" --isolated --select "$RULES" --output-format json --exit-zero > lab6-reports/ruff.json
+          # Per-function cyclomatic complexity and maintainability index of the refactored file (radon).
+          radon cc -s -a ultralytics/trackers/utils/kalman_filter.py | tee lab6-reports/radon-cc-kalman.txt
+          radon mi -s ultralytics/trackers/utils/kalman_filter.py | tee lab6-reports/radon-mi-kalman.txt
+          radon raw ultralytics/trackers/utils/kalman_filter.py | tee lab6-reports/radon-raw-kalman.txt
+
+      - name: Write summary
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import collections, json, os, re
+          rows = json.load(open("lab6-reports/ruff.json"))
+          c = collections.Counter(r["code"] for r in rows)
+          print("## Ruff C901 / PLR0912 / PLR0913 / PLR0915 - `ultralytics/`\n")
+          print("| Rule | Count |\n|---|---|")
+          for code, n in sorted(c.items()):
+              print(f"| {code} | {n} |")
+          print(f"| **total** | **{len(rows)}** |\n")
+          cx = [(int(re.search(r'\((\d+) >', r['message']).group(1)), r) for r in rows if r["code"] == "C901"]
+          print("### Highest cyclomatic complexity (C901)\n\n| CC | Location |\n|---|---|")
+          for n, r in sorted(cx, key=lambda t: -t[0])[:15]:
+              print(f"| {n} | `{os.path.relpath(r['filename'])}:{r['location']['row']}` {r['message']} |")
+          print("\n### radon - `trackers/utils/kalman_filter.py`\n\n```")
+          for f in ("radon-raw-kalman.txt", "radon-cc-kalman.txt", "radon-mi-kalman.txt"):
+              print(open(f"lab6-reports/{f}").read())
+          print("```")
+          EOF
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab6-ruff-report
+          path: lab6-reports/
+          if-no-files-found: warn
+          retention-days: 30

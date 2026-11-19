@@ -1,0 +1,70 @@
+# Lab #6 - duplication evidence (adapted from the course example examples/lab6-duplication.yml).
+# Runs jscpd on GitHub-hosted runners for every push to the course branches.
+# Scope: handwritten Python in the `ultralytics/` package only (tests, docs, examples and non-Python files excluded),
+# so the numbers match the GQM object. Settings must stay identical before and after refactoring.
+name: Lab6 - Duplication
+
+on:
+  push:
+    branches:
+      - semester-investigation
+      - 'lab6-*'
+
+permissions:
+  contents: read
+  security-events: write # optional SARIF upload to Security -> Code scanning
+
+env:
+  JSCPD_VERSION: '4.3.0'
+
+jobs:
+  duplication:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact pushed revision
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Analyze duplication in ultralytics/ (Python only)
+        run: |
+          npx --yes "jscpd@${JSCPD_VERSION}" ultralytics \
+            --format python --min-lines 5 --min-tokens 50 \
+            --reporters console,json,sarif --output report
+
+      - name: Write summary (overall numbers + Kalman filter file)
+        if: always()
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open("report/jscpd-report.json"))
+          t = d["statistics"]["total"]
+          print("## jscpd duplication - `ultralytics/` (Python, min 5 lines / 50 tokens)\n")
+          print(f"- Files analysed: **{t['sources']}**, lines: **{t['lines']}**")
+          print(f"- Clones: **{t['clones']}**, duplicated lines: **{t['duplicatedLines']}** ({t['percentage']:.2f}%)\n")
+          print("### Largest clones\n\n| Lines | First | Second |\n|---|---|---|")
+          for x in sorted(d["duplicates"], key=lambda x: -x["lines"])[:15]:
+              a, b = x["firstFile"], x["secondFile"]
+              print(f"| {x['lines']} | `{a['name']}:{a['start']}-{a['end']}` | `{b['name']}:{b['start']}-{b['end']}` |")
+          k = [x for x in d["duplicates"] if "kalman_filter" in x["firstFile"]["name"] + x["secondFile"]["name"]]
+          print(f"\n### `trackers/utils/kalman_filter.py`: **{len(k)} clones, {sum(x['lines'] for x in k)} duplicated lines**")
+          EOF
+
+      - name: Publish SARIF to code scanning (presentation only, not security findings)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: report/jscpd-sarif.json
+          category: lab6-jscpd
+
+      - name: Keep a downloadable copy of the report (time-limited)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab6-duplication-report
+          path: report/
+          if-no-files-found: warn
+          retention-days: 30

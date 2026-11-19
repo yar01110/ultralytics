@@ -1,0 +1,47 @@
+# Lab #6 - targeted regression check for the tracker / Kalman filter code (CPU only, no weights, no datasets).
+# The upstream ci.yml is not used: it needs GPUs, benchmarks and downloads, and only triggers on main / PRs.
+# What it checks:
+#   1. tests/test_lab6_kalman.py - golden master: every public Kalman filter method returns bit-identical arrays to the
+#      pre-refactoring baseline for fixed seeded inputs.
+#   2. Kalman filter docstring examples (doctests).
+#   3. Existing upstream tracker unit tests in tests/test_python.py that need no weights or network
+#      (ByteTrack, BoT-SORT, OC-SORT, Deep OC-SORT, TrackTrack association logic).
+# What it cannot establish: equivalence for inputs not exercised, end-to-end tracking quality on real video.
+name: Lab6 - Tracker regression tests
+
+on:
+  push:
+    branches:
+      - semester-investigation
+      - 'lab6-*'
+
+permissions:
+  contents: read
+
+jobs:
+  tracker-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out this exact revision
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ultralytics with CPU-only PyTorch
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest --extra-index-url https://download.pytorch.org/whl/cpu
+          python -c "import ultralytics, torch, numpy; print(ultralytics.__version__, torch.__version__, numpy.__version__)"
+
+      - name: Golden-master characterization test (Kalman filter)
+        run: python -m pytest -v -p no:cacheprovider tests/test_lab6_kalman.py
+
+      - name: Kalman filter doctests
+        run: python -m pytest -v -p no:cacheprovider ultralytics/trackers/utils/kalman_filter.py
+
+      - name: Existing upstream tracker unit tests (no weights, no network)
+        run: >-
+          python -m pytest -v -p no:cacheprovider tests/test_python.py
+          -k "track_second or track_split or tracktrack_new or track_reid_auto"
